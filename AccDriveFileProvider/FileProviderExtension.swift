@@ -101,12 +101,6 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
         let progress = Progress(totalUnitCount: 100)
 
-        // Folder creation is not supported yet — only file upload.
-        if itemTemplate.contentType?.conforms(to: .folder) == true {
-            completionHandler(nil, [], false, readOnlyError)
-            return progress
-        }
-
         guard let parentRef = IdentifierStore.shared.ref(for: itemTemplate.parentItemIdentifier),
               parentRef.type == .folder,
               let projectId = parentRef.projectId,
@@ -115,24 +109,25 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
             return progress
         }
 
-        guard let contentsURL = url, let data = try? Data(contentsOf: contentsURL) else {
-            completionHandler(nil, [], false, readOnlyError)
-            return progress
-        }
+        let name = itemTemplate.filename
+        let isFolder = itemTemplate.contentType?.conforms(to: .folder) == true
 
-        let filename = itemTemplate.filename
         Task {
             do {
-                let ref = try await APSClient.shared.uploadFile(hubId: parentRef.hubId,
-                                                                projectId: projectId,
-                                                                folderId: folderId,
-                                                                filename: filename,
-                                                                data: data)
+                let ref: APSItemRef
+                if isFolder {
+                    ref = try await APSClient.shared.createFolder(hubId: parentRef.hubId, projectId: projectId, parentFolderId: folderId, name: name)
+                } else {
+                    guard let contentsURL = url, let data = try? Data(contentsOf: contentsURL) else {
+                        throw APSClient.APSError.notDownloadable
+                    }
+                    ref = try await APSClient.shared.uploadFile(hubId: parentRef.hubId, projectId: projectId, folderId: folderId, filename: name, data: data)
+                }
                 IdentifierStore.shared.save(ref)
                 progress.completedUnitCount = 100
                 completionHandler(FileProviderItem(ref: ref), [], false, nil)
             } catch {
-                Log.fileProvider.error("createItem upload failed for \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                Log.fileProvider.error("createItem failed for \(name, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 completionHandler(nil, [], false, fileProviderError(error))
             }
         }
@@ -146,8 +141,70 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     options: NSFileProviderModifyItemOptions = [],
                     request: NSFileProviderRequest,
                     completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
-        completionHandler(nil, [], false, readOnlyError)
-        return Progress()
+        let progress = Progress(totalUnitCount: 100)
+
+        guard var ref = IdentifierStore.shared.ref(for: item.itemIdentifier), let projectId = ref.projectId else {
+            completionHandler(nil, [], false, NSFileProviderError(.noSuchItem))
+            return progress
+        }
+
+        // Resolve a move target up front (needs the new parent's folder id).
+        var newParentFolderId: String?
+        if changedFields.contains(.parentItemIdentifier),
+           let parentRef = IdentifierStore.shared.ref(for: item.parentItemIdentifier),
+           parentRef.type == .folder {
+            newParentFolderId = parentRef.folderId
+        }
+        let newName: String? = changedFields.contains(.filename) ? item.filename : nil
+
+        Task {
+            do {
+                // 1. Content edit and/or rename (a rename is a new version too).
+                if ref.type == .file, let itemId = ref.itemId {
+                    let finalName = newName ?? ref.displayName
+                    if changedFields.contains(.contents), let folderId = ref.folderId,
+                       let url = newContents, let data = try? Data(contentsOf: url) {
+                        let versionId = try await APSClient.shared.addFileVersion(projectId: projectId, itemId: itemId, folderId: folderId, filename: finalName, data: data)
+                        ref.versionId = versionId
+                        ref.fileSize = Int64(data.count)
+                        if let newName { ref.displayName = newName }
+                    } else if let newName, let folderId = ref.folderId {
+                        let versionId = try await APSClient.shared.renameItem(projectId: projectId, itemId: itemId, folderId: folderId, newName: newName, storageId: ref.storageId)
+                        ref.versionId = versionId
+                        ref.displayName = newName
+                    }
+                } else if ref.type == .folder, let newName, let folderId = ref.folderId {
+                    try await APSClient.shared.patchFolder(projectId: projectId, folderId: folderId, name: newName, newParentFolderId: nil, hidden: nil)
+                    ref.displayName = newName
+                }
+
+                // 2. Move (reparent).
+                if let newParentFolderId {
+                    switch ref.type {
+                    case .file:
+                        if let itemId = ref.itemId {
+                            try await APSClient.shared.patchItem(projectId: projectId, itemId: itemId, displayName: nil, newParentFolderId: newParentFolderId)
+                        }
+                    case .folder:
+                        if let folderId = ref.folderId {
+                            try await APSClient.shared.patchFolder(projectId: projectId, folderId: folderId, name: nil, newParentFolderId: newParentFolderId, hidden: nil)
+                        }
+                    default:
+                        break
+                    }
+                    ref.parentIdentifier = item.parentItemIdentifier.rawValue
+                    if ref.type == .file { ref.folderId = newParentFolderId }
+                }
+
+                IdentifierStore.shared.save(ref)
+                progress.completedUnitCount = 100
+                completionHandler(FileProviderItem(ref: ref), [], false, nil)
+            } catch {
+                Log.fileProvider.error("modifyItem failed for \(ref.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                completionHandler(nil, [], false, fileProviderError(error))
+            }
+        }
+        return progress
     }
 
     func deleteItem(identifier: NSFileProviderItemIdentifier,
@@ -155,7 +212,36 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     options: NSFileProviderDeleteItemOptions = [],
                     request: NSFileProviderRequest,
                     completionHandler: @escaping (Error?) -> Void) -> Progress {
-        completionHandler(readOnlyError)
-        return Progress()
+        let progress = Progress(totalUnitCount: 100)
+
+        guard let ref = IdentifierStore.shared.ref(for: identifier), let projectId = ref.projectId else {
+            completionHandler(NSFileProviderError(.noSuchItem))
+            return progress
+        }
+
+        Task {
+            do {
+                switch ref.type {
+                case .file:
+                    if let itemId = ref.itemId {
+                        try await APSClient.shared.deleteFileItem(projectId: projectId, itemId: itemId)
+                    }
+                case .folder:
+                    if let folderId = ref.folderId {
+                        try await APSClient.shared.deleteFolder(projectId: projectId, folderId: folderId)
+                    }
+                default:
+                    completionHandler(readOnlyError)
+                    return
+                }
+                IdentifierStore.shared.remove(identifier)
+                progress.completedUnitCount = 100
+                completionHandler(nil)
+            } catch {
+                Log.fileProvider.error("deleteItem failed for \(ref.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                completionHandler(fileProviderError(error))
+            }
+        }
+        return progress
     }
 }

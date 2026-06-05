@@ -113,6 +113,7 @@ final class APSClient {
                                        displayName: res.attributes?.bestName ?? attrs?.bestName ?? res.id,
                                        hubId: hubId,
                                        projectId: projectId,
+                                       folderId: folderId,
                                        itemId: res.id,
                                        versionId: tipId,
                                        storageId: version?.relationships?.storage?.data?.id,
@@ -164,12 +165,117 @@ final class APSClient {
                              displayName: filename,
                              hubId: hubId,
                              projectId: projectId,
+                             folderId: folderId,
                              itemId: itemId,
                              versionId: versionId,
                              storageId: storageURN,
                              parentIdentifier: parent)
         ref.fileSize = Int64(data.count)
         return ref
+    }
+
+    // MARK: - Folders, delete, rename, move, new version
+
+    /// Creates a subfolder.
+    func createFolder(hubId: String?, projectId: String, parentFolderId: String, name: String) async throws -> APSItemRef {
+        let url = baseURL.appendingPathComponent("data/v1/projects/\(projectId)/folders")
+        let body: [String: Any] = [
+            "jsonapi": ["version": "1.0"],
+            "data": [
+                "type": "folders",
+                "attributes": [
+                    "name": name,
+                    "extension": ["type": "folders:autodesk.bim360:Folder", "version": "1.0"],
+                ],
+                "relationships": ["parent": ["data": ["type": "folders", "id": parentFolderId]]],
+            ],
+        ]
+        let data = try await post(url, body: try JSONSerialization.data(withJSONObject: body))
+        let doc = try JSONDecoder().decode(JSONAPISingle.self, from: data)
+        let parent = APSItemRef(type: .folder, displayName: "", projectId: projectId, folderId: parentFolderId).identifier.rawValue
+        return APSItemRef(type: .folder, displayName: name, hubId: hubId, projectId: projectId, folderId: doc.data.id, parentIdentifier: parent)
+    }
+
+    /// Marks a file item as deleted (ACC has no hard delete — it adds a "deleted" version).
+    func deleteFileItem(projectId: String, itemId: String) async throws {
+        let url = baseURL.appendingPathComponent("data/v1/projects/\(projectId)/versions")
+        let body: [String: Any] = [
+            "jsonapi": ["version": "1.0"],
+            "data": [
+                "type": "versions",
+                "attributes": ["extension": ["type": "versions:autodesk.core:Deleted", "version": "1.0"]],
+                "relationships": ["item": ["data": ["type": "items", "id": itemId]]],
+            ],
+        ]
+        _ = try await post(url, body: try JSONSerialization.data(withJSONObject: body))
+    }
+
+    /// Deletes (hides) a folder.
+    func deleteFolder(projectId: String, folderId: String) async throws {
+        try await patchFolder(projectId: projectId, folderId: folderId, name: nil, newParentFolderId: nil, hidden: true)
+    }
+
+    /// Renames and/or moves a file item.
+    func patchItem(projectId: String, itemId: String, displayName: String?, newParentFolderId: String?) async throws {
+        let url = baseURL.appendingPathComponent("data/v1/projects/\(projectId)/items/\(itemId)")
+        var data: [String: Any] = ["type": "items", "id": itemId]
+        if let displayName { data["attributes"] = ["displayName": displayName] }
+        if let newParentFolderId {
+            data["relationships"] = ["parent": ["data": ["type": "folders", "id": newParentFolderId]]]
+        }
+        let body: [String: Any] = ["jsonapi": ["version": "1.0"], "data": data]
+        _ = try await patch(url, body: try JSONSerialization.data(withJSONObject: body))
+    }
+
+    /// Renames, moves and/or hides a folder.
+    func patchFolder(projectId: String, folderId: String, name: String?, newParentFolderId: String?, hidden: Bool?) async throws {
+        let url = baseURL.appendingPathComponent("data/v1/projects/\(projectId)/folders/\(folderId)")
+        var attributes: [String: Any] = [:]
+        if let name { attributes["name"] = name }
+        if let hidden { attributes["hidden"] = hidden }
+        var data: [String: Any] = ["type": "folders", "id": folderId]
+        if !attributes.isEmpty { data["attributes"] = attributes }
+        if let newParentFolderId {
+            data["relationships"] = ["parent": ["data": ["type": "folders", "id": newParentFolderId]]]
+        }
+        let body: [String: Any] = ["jsonapi": ["version": "1.0"], "data": data]
+        _ = try await patch(url, body: try JSONSerialization.data(withJSONObject: body))
+    }
+
+    /// Uploads new content as a new version of an existing file.
+    @discardableResult
+    func addFileVersion(projectId: String, itemId: String, folderId: String, filename: String, data: Data) async throws -> String {
+        let storageURN = try await createStorage(projectId: projectId, folderId: folderId, filename: filename)
+        try await uploadBytes(storageURN: storageURN, data: data)
+        let url = baseURL.appendingPathComponent("data/v1/projects/\(projectId)/versions")
+        let body: [String: Any] = [
+            "jsonapi": ["version": "1.0"],
+            "data": [
+                "type": "versions",
+                "attributes": [
+                    "name": filename,
+                    "extension": ["type": "versions:autodesk.bim360:File", "version": "1.0"],
+                ],
+                "relationships": [
+                    "item": ["data": ["type": "items", "id": itemId]],
+                    "storage": ["data": ["type": "objects", "id": storageURN]],
+                ],
+            ],
+        ]
+        let respData = try await post(url, body: try JSONSerialization.data(withJSONObject: body))
+        let doc = try JSONDecoder().decode(JSONAPISingle.self, from: respData)
+        return doc.data.id
+    }
+
+    /// Renames a file. BIM360/ACC has no PATCH rename and won't let a new version
+    /// reuse an existing storage URN, so we download the current content and
+    /// upload it as a fresh tip version under the new name.
+    @discardableResult
+    func renameItem(projectId: String, itemId: String, folderId: String, newName: String, storageId: String?) async throws -> String {
+        let downloadRef = APSItemRef(type: .file, displayName: "", projectId: projectId, itemId: itemId, storageId: storageId)
+        let url = try await downloadURL(for: downloadRef)
+        let (bytes, _) = try await session.data(from: url)
+        return try await addFileVersion(projectId: projectId, itemId: itemId, folderId: folderId, filename: newName, data: bytes)
     }
 
     private func createStorage(projectId: String, folderId: String, filename: String) async throws -> String {
@@ -295,6 +401,16 @@ final class APSClient {
     func post(_ url: URL, body: Data, contentType: String = "application/vnd.api+json") async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.setValue("application/vnd.api+json", forHTTPHeaderField: "Accept")
+        return try await authedData(for: request)
+    }
+
+    /// Performs an authorized PATCH with token refresh and backoff retry.
+    func patch(_ url: URL, body: Data, contentType: String = "application/vnd.api+json") async throws -> Data {
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
         request.httpBody = body
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         request.setValue("application/vnd.api+json", forHTTPHeaderField: "Accept")

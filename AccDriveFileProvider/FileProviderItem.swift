@@ -36,10 +36,10 @@ final class FileProviderItem: NSObject, NSFileProviderItem {
     var capabilities: NSFileProviderItemCapabilities {
         switch ref.type {
         case .file:
-            return [.allowsReading]
+            return [.allowsReading, .allowsWriting, .allowsRenaming, .allowsReparenting, .allowsDeleting]
         case .folder:
-            // Real ACC folders accept new files (upload).
-            return [.allowsReading, .allowsContentEnumerating, .allowsAddingSubItems]
+            return [.allowsReading, .allowsContentEnumerating, .allowsAddingSubItems,
+                    .allowsRenaming, .allowsReparenting, .allowsDeleting]
         default:
             // root / hub / project are navigational containers only.
             return [.allowsReading, .allowsContentEnumerating]
