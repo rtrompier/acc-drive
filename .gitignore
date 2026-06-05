@@ -1,0 +1,17 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+
+# XcodeGen output (regenerate with `xcodegen generate`)
+AccDrive.xcodeproj/
+
+# macOS
+.DS_Store
+
+# Local credentials — never commit real APS secrets
+Config.local.plist
+Config.plist

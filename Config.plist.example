@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Configuration for Autodesk Platform Services (APS).
+
+  1. Copy this file to Config.plist (which is git-ignored) and fill in your own
+     credentials. Create an APS app at https://aps.autodesk.com/myapps to obtain
+     your client id and client secret.
+  2. The redirect URI must match the Callback URL registered for the APS app and
+     the custom URL scheme declared in AccDrive/Info.plist (CFBundleURLSchemes).
+  3. Set MOCK_MODE to <true/> to run a no-account demo: the app serves canned
+     data without calling APS or requiring sign-in. Set it to <false/> to use
+     the real Autodesk API.
+-->
+<plist version="1.0">
+<dict>
+    <key>APS_CLIENT_ID</key>
+    <string>YOUR_APS_CLIENT_ID</string>
+    <key>APS_CLIENT_SECRET</key>
+    <string>YOUR_APS_CLIENT_SECRET</string>
+    <key>APS_REDIRECT_URI</key>
+    <string>accdrive://oauth/callback</string>
+    <key>MOCK_MODE</key>
+    <false/>
+</dict>
+</plist>

@@ -1,0 +1,79 @@
+name: build
+
+# NOTE: the released AccDrive.app is UNSIGNED. Code signing requires an Apple
+# Developer team (App Group + FileProvider testing-mode entitlements), which is
+# not available in CI. To actually run the app, users must re-sign it with their
+# own Apple Developer team. This workflow only verifies that the project compiles
+# and produces an unsigned artifact.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Prepare Config.plist
+        run: cp Config.plist.example Config.plist
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build (unsigned)
+        run: |
+          xcodebuild -project AccDrive.xcodeproj -scheme AccDrive \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Prepare Config.plist
+        run: cp Config.plist.example Config.plist
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build (unsigned)
+        run: |
+          xcodebuild -project AccDrive.xcodeproj -scheme AccDrive \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Locate and zip AccDrive.app
+        run: |
+          APP_PATH=$(find build -name 'AccDrive.app' -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "AccDrive.app not found" >&2
+            exit 1
+          fi
+          echo "Found app at $APP_PATH"
+          ditto -c -k --keepParent "$APP_PATH" AccDrive.app.zip
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: AccDrive.app.zip
