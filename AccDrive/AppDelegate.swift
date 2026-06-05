@@ -42,8 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuildMenu() {
         let menu = NSMenu()
         if isSignedIn {
-            menu.addItem(NSMenuItem(title: "Sign out", action: #selector(signOut), keyEquivalent: ""))
             menu.addItem(NSMenuItem(title: "Open in Finder", action: #selector(openInFinder), keyEquivalent: ""))
+            menu.addItem(NSMenuItem(title: "Refresh", action: #selector(refresh), keyEquivalent: "r"))
+            menu.addItem(NSMenuItem(title: "Sign out", action: #selector(signOut), keyEquivalent: ""))
         } else {
             menu.addItem(NSMenuItem(title: "Sign in to Autodesk", action: #selector(signIn), keyEquivalent: ""))
         }
@@ -93,6 +94,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 Log.app.error("Cannot resolve Finder URL: \(error.localizedDescription, privacy: .public)")
             }
+        }
+    }
+
+    @objc private func refresh() {
+        // Re-add the domain to force a fresh enumeration (picks up new files and
+        // updated item capabilities) without requiring a new sign-in.
+        Task { @MainActor in
+            await removeDomain()
+            await registerDomain()
         }
     }
 

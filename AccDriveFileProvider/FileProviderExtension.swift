@@ -1,4 +1,5 @@
 import FileProvider
+import UniformTypeIdentifiers
 
 /// The principal class of the FileProvider extension.
 ///
@@ -98,8 +99,44 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     options: NSFileProviderCreateItemOptions = [],
                     request: NSFileProviderRequest,
                     completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
-        completionHandler(nil, [], false, readOnlyError)
-        return Progress()
+        let progress = Progress(totalUnitCount: 100)
+
+        // Folder creation is not supported yet — only file upload.
+        if itemTemplate.contentType?.conforms(to: .folder) == true {
+            completionHandler(nil, [], false, readOnlyError)
+            return progress
+        }
+
+        guard let parentRef = IdentifierStore.shared.ref(for: itemTemplate.parentItemIdentifier),
+              parentRef.type == .folder,
+              let projectId = parentRef.projectId,
+              let folderId = parentRef.folderId else {
+            completionHandler(nil, [], false, NSFileProviderError(.noSuchItem))
+            return progress
+        }
+
+        guard let contentsURL = url, let data = try? Data(contentsOf: contentsURL) else {
+            completionHandler(nil, [], false, readOnlyError)
+            return progress
+        }
+
+        let filename = itemTemplate.filename
+        Task {
+            do {
+                let ref = try await APSClient.shared.uploadFile(hubId: parentRef.hubId,
+                                                                projectId: projectId,
+                                                                folderId: folderId,
+                                                                filename: filename,
+                                                                data: data)
+                IdentifierStore.shared.save(ref)
+                progress.completedUnitCount = 100
+                completionHandler(FileProviderItem(ref: ref), [], false, nil)
+            } catch {
+                Log.fileProvider.error("createItem upload failed for \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                completionHandler(nil, [], false, fileProviderError(error))
+            }
+        }
+        return progress
     }
 
     func modifyItem(_ item: NSFileProviderItem,
