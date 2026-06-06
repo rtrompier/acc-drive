@@ -75,8 +75,11 @@ final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
         }
 
         Task {
-            // Re-fetch every browsed project/folder, building a global view of
-            // which identifiers still exist (to distinguish moves from deletes).
+            // Track changes inside projects and folders only (file & subfolder
+            // adds/updates/deletes). Tracking the hub/root level makes the system
+            // try to "create" the hub and fail with FP -1005, jamming the queue —
+            // so new projects/hubs surface only on a full re-enumeration (sign
+            // out/in), not via the live feed.
             let containers = IdentifierStore.shared.allSnapshotContainers().compactMap { id -> (NSFileProviderItemIdentifier, APSItemRef)? in
                 guard let ref = IdentifierStore.shared.ref(for: id), ref.type == .project || ref.type == .folder else { return nil }
                 return (id, ref)
