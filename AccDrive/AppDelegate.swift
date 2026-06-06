@@ -5,6 +5,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var statusWindow: NSWindow?
+    private var syncTimer: Timer?
 
     private let domain = NSFileProviderDomain(
         identifier: AppGroup.domainIdentifier,
@@ -17,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
+        startSyncTimer()
         if AppConfig.shared.mockMode {
             // Demo mode: no sign-in needed. Re-add the domain to clear any
             // cached enumeration so the mock tree shows immediately.
@@ -94,6 +96,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 Log.app.error("Cannot resolve Finder URL: \(error.localizedDescription, privacy: .public)")
             }
+        }
+    }
+
+    /// Periodically nudges the system to check for external changes (polling).
+    /// No-ops while signed out (the domain manager is nil).
+    private func startSyncTimer() {
+        syncTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            guard let self, let manager = NSFileProviderManager(for: self.domain) else { return }
+            manager.signalEnumerator(for: .workingSet) { _ in }
+            manager.signalEnumerator(for: .rootContainer) { _ in }
         }
     }
 

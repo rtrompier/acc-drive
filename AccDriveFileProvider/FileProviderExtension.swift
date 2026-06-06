@@ -83,12 +83,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier,
                     request: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
         if containerItemIdentifier == .workingSet || containerItemIdentifier == .trashContainer {
-            return FileProviderEnumerator(containerRef: nil)
+            return FileProviderEnumerator(containerIdentifier: containerItemIdentifier, containerRef: nil)
         }
         guard let ref = IdentifierStore.shared.ref(for: containerItemIdentifier) else {
             throw NSFileProviderError(.noSuchItem)
         }
-        return FileProviderEnumerator(containerRef: ref)
+        return FileProviderEnumerator(containerIdentifier: containerItemIdentifier, containerRef: ref)
     }
 
     // MARK: - Mutations (read-only)

@@ -49,5 +49,11 @@ struct APSItemRef: Codable {
         }
     }
 
+    /// Fingerprint used to detect changes between enumerations. Changes whenever
+    /// a file gets a new version, an item is renamed, resized, or moved.
+    var changeSignature: String {
+        "\(type.rawValue)|\(versionId ?? "")|\(displayName)|\(fileSize ?? -1)|\(parentIdentifier ?? "")"
+    }
+
     static let root = APSItemRef(type: .root, displayName: AppGroup.domainDisplayName)
 }
