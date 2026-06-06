@@ -28,7 +28,11 @@ final class AuthManager: NSObject, ASWebAuthenticationPresentationContextProvidi
                 }
             }
             session.presentationContextProvider = self
-            session.prefersEphemeralWebBrowserSession = false
+            // Ephemeral: don't reuse the browser's Autodesk cookies, so each
+            // sign-in prompts for credentials and the user can pick the account
+            // (otherwise it silently re-authenticates as whoever is logged into
+            // Autodesk in the browser).
+            session.prefersEphemeralWebBrowserSession = true
             self.session = session
             if !session.start() {
                 continuation.resume(throwing: AuthError.cannotStart)
