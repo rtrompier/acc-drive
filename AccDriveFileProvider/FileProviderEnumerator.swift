@@ -1,12 +1,14 @@
 import FileProvider
 
-/// Enumerates a container's children and tracks changes between enumerations.
+/// Enumerates a container's children and tracks external changes.
 ///
-/// `enumerateItems` lists the container and records a snapshot (childId →
-/// signature). `enumerateChanges` re-fetches, diffs against the snapshot, and
-/// reports `didUpdate` / `didDeleteItems`. The working-set enumerator re-checks
-/// every container that has been browsed, so external edits/deletes propagate
-/// to Finder when the host signals it.
+/// Initial listing is per-container (`enumerateItems`). Change detection runs
+/// only in the **working set** enumerator: it re-fetches every browsed
+/// project/folder, diffs against the last snapshot, and reports `didUpdate` /
+/// `didDeleteItems`. Doing it globally (rather than per-container) is what lets
+/// a move be told apart from a delete: an item that disappears from one folder
+/// but reappears in another was moved, not deleted. The host app drives this by
+/// periodically signalling the working set.
 final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
     private let containerIdentifier: NSFileProviderItemIdentifier
     private let containerRef: APSItemRef?
@@ -32,69 +34,88 @@ final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             do {
                 let refs = try await children(of: containerRef)
                 IdentifierStore.shared.save(refs)
-                recordSnapshot(refs, for: containerIdentifier)
+                var snapshot: [String: String] = [:]
+                for ref in refs { snapshot[ref.identifier.rawValue] = ref.changeSignature }
+                IdentifierStore.shared.setChildSnapshot(snapshot, of: containerIdentifier)
                 observer.didEnumerate(refs.map { FileProviderItem(ref: $0) })
                 observer.finishEnumerating(upTo: nil)
             } catch {
-                Log.fileProvider.error("Enumeration failed: \(error.localizedDescription, privacy: .public)")
-                observer.finishEnumeratingWithError(fileProviderError(error))
+                // A deleted folder returns 404; enumerate it as empty rather than
+                // erroring, otherwise the system retries materialization forever
+                // and can't apply the deletion.
+                if case APSClient.APSError.server(let status, _) = error, status == 404 {
+                    observer.didEnumerate([])
+                    observer.finishEnumerating(upTo: nil)
+                } else {
+                    Log.fileProvider.error("Enumeration failed: \(error.localizedDescription, privacy: .public)")
+                    observer.finishEnumeratingWithError(fileProviderError(error))
+                }
             }
         }
     }
 
-    // MARK: - Change tracking
+    // MARK: - Change tracking (working set only)
 
     func enumerateChanges(for observer: NSFileProviderChangeObserver, from anchor: NSFileProviderSyncAnchor) {
+        guard containerIdentifier == .workingSet else {
+            observer.finishEnumeratingChanges(upTo: anchor, moreComing: false)
+            return
+        }
+
         Task {
-            let containers: [(NSFileProviderItemIdentifier, APSItemRef)]
-            if containerIdentifier == .workingSet {
-                // Re-check every container that has been browsed.
-                containers = IdentifierStore.shared.allSnapshotContainers().compactMap { id in
-                    IdentifierStore.shared.ref(for: id).map { (id, $0) }
+            // Only track changes inside projects and folders (file/subfolder
+            // adds/updates/deletes). Tracking hub/root level produced failing
+            // create-item jobs.
+            let containers = IdentifierStore.shared.allSnapshotContainers().compactMap { id -> (NSFileProviderItemIdentifier, APSItemRef)? in
+                guard let ref = IdentifierStore.shared.ref(for: id), ref.type == .project || ref.type == .folder else {
+                    return nil
                 }
-            } else if let containerRef {
-                containers = [(containerIdentifier, containerRef)]
-            } else {
-                containers = []
+                return (id, ref)
+            }
+
+            // Fetch everything first to build a global "still exists" set.
+            var fetched: [(NSFileProviderItemIdentifier, [APSItemRef])] = []
+            var globalIdentifiers = Set<String>()
+            for (id, ref) in containers {
+                guard let children = try? await children(of: ref) else { continue }
+                fetched.append((id, children))
+                for child in children { globalIdentifiers.insert(child.identifier.rawValue) }
             }
 
             var updated: [FileProviderItem] = []
             var deleted: [NSFileProviderItemIdentifier] = []
-
-            for (id, ref) in containers {
-                guard let current = try? await children(of: ref) else { continue }
+            for (id, children) in fetched {
                 let old = IdentifierStore.shared.childSnapshot(of: id)
                 var newSnapshot: [String: String] = [:]
-                for child in current {
+                for child in children {
                     let key = child.identifier.rawValue
                     newSnapshot[key] = child.changeSignature
                     if old[key] != child.changeSignature {
                         updated.append(FileProviderItem(ref: child))
                     }
                 }
-                for key in old.keys where newSnapshot[key] == nil {
+                for key in old.keys where newSnapshot[key] == nil && !globalIdentifiers.contains(key) {
                     deleted.append(NSFileProviderItemIdentifier(key))
                 }
-                IdentifierStore.shared.save(current)
+                IdentifierStore.shared.save(children)
                 IdentifierStore.shared.setChildSnapshot(newSnapshot, of: id)
             }
 
+            Log.fileProvider.info("workingSet changes: \(updated.count) updated, \(deleted.count) deleted \(deleted.map { $0.rawValue }, privacy: .public)")
             if !updated.isEmpty { observer.didUpdate(updated) }
             if !deleted.isEmpty { observer.didDeleteItems(withIdentifiers: deleted) }
-            observer.finishEnumeratingChanges(upTo: anchor, moreComing: false)
+            // The anchor must advance once changes are reported, otherwise the
+            // system rejects the batch (FP -1002) and stops applying changes.
+            observer.finishEnumeratingChanges(upTo: Self.freshAnchor(), moreComing: false)
         }
     }
 
     func currentSyncAnchor(completionHandler: @escaping (NSFileProviderSyncAnchor?) -> Void) {
-        completionHandler(NSFileProviderSyncAnchor(Data("v1".utf8)))
+        completionHandler(Self.freshAnchor())
     }
 
-    // MARK: - Helpers
-
-    private func recordSnapshot(_ refs: [APSItemRef], for container: NSFileProviderItemIdentifier) {
-        var snapshot: [String: String] = [:]
-        for ref in refs { snapshot[ref.identifier.rawValue] = ref.changeSignature }
-        IdentifierStore.shared.setChildSnapshot(snapshot, of: container)
+    private static func freshAnchor() -> NSFileProviderSyncAnchor {
+        NSFileProviderSyncAnchor(Data("\(Date().timeIntervalSince1970)".utf8))
     }
 
     private func children(of ref: APSItemRef) async throws -> [APSItemRef] {

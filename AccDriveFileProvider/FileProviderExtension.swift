@@ -23,10 +23,38 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
               completionHandler: @escaping (NSFileProviderItem?, Error?) -> Void) -> Progress {
         if let ref = IdentifierStore.shared.ref(for: identifier) {
             completionHandler(FileProviderItem(ref: ref), nil)
-        } else {
-            completionHandler(nil, NSFileProviderError(.noSuchItem))
+            return Progress()
         }
-        return Progress()
+
+        // Store miss (e.g. the extension was recycled before the parent was
+        // enumerated): reconstruct from the identifier instead of returning
+        // .noSuchItem, which would make the system drop the item and jam its
+        // import queue with failing jobs.
+        guard let partial = APSItemRef(identifier: identifier) else {
+            completionHandler(nil, NSFileProviderError(.noSuchItem))
+            return Progress()
+        }
+
+        let progress = Progress(totalUnitCount: 1)
+        Task {
+            do {
+                let ref: APSItemRef
+                switch partial.type {
+                case .file:
+                    ref = try await APSClient.shared.fileRef(projectId: partial.projectId ?? "", itemId: partial.itemId ?? "")
+                case .folder:
+                    ref = try await APSClient.shared.folderRef(hubId: partial.hubId, projectId: partial.projectId ?? "", folderId: partial.folderId ?? "")
+                default:
+                    ref = partial // hub / project: parent is already derivable
+                }
+                IdentifierStore.shared.save(ref)
+                completionHandler(FileProviderItem(ref: ref), nil)
+            } catch {
+                completionHandler(nil, fileProviderError(error))
+            }
+            progress.completedUnitCount = 1
+        }
+        return progress
     }
 
     func fetchContents(for itemIdentifier: NSFileProviderItemIdentifier,

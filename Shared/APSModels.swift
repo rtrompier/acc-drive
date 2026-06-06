@@ -64,6 +64,7 @@ struct APSAttributes: Decodable {
     let mimeType: String?
     let lastModifiedTime: String?
     let createTime: String?
+    let hidden: Bool?
     let `extension`: APSExtension?
 }
 
@@ -75,6 +76,7 @@ struct APSRelationships: Decodable {
     let tip: APSRelationship?
     let storage: APSRelationship?
     let derivatives: APSRelationship?
+    let parent: APSRelationship?
 }
 
 struct APSRelationship: Decodable {

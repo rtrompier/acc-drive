@@ -74,7 +74,7 @@ final class APSClient {
         let doc = try await getList(url)
         let parent = APSItemRef(type: .project, displayName: "", hubId: hubId, projectId: projectId).identifier.rawValue
         return doc.data
-            .filter { $0.type == "folders" }
+            .filter { $0.type == "folders" && $0.attributes?.hidden != true }
             .map { res in
                 APSItemRef(type: .folder,
                            displayName: res.attributes?.bestName ?? res.id,
@@ -97,6 +97,11 @@ final class APSClient {
 
         var refs: [APSItemRef] = []
         for res in doc.data {
+            // Skip hidden/deleted entries (ACC deletes by hiding, and keeps
+            // returning them in contents — they must be filtered out so deletions
+            // made elsewhere are detected).
+            if res.attributes?.hidden == true { continue }
+
             switch res.type {
             case "folders":
                 refs.append(APSItemRef(type: .folder,
@@ -109,6 +114,8 @@ final class APSClient {
                 let tipId = res.relationships?.tip?.data?.id
                 let version = tipId.flatMap { included[$0] }
                 let attrs = version?.attributes
+                // Skip items whose tip version is a "deleted" tombstone.
+                if (attrs?.extension?.type ?? "").localizedCaseInsensitiveContains("Deleted") { continue }
                 refs.append(APSItemRef(type: .file,
                                        displayName: res.attributes?.bestName ?? attrs?.bestName ?? res.id,
                                        hubId: hubId,
@@ -149,6 +156,44 @@ final class APSClient {
             throw APSError.notDownloadable
         }
         return signed
+    }
+
+    // MARK: - Single-item metadata (for item(for:) reconstruction)
+
+    private func getSingle(_ url: URL) async throws -> JSONAPISingle {
+        let data = try await get(url)
+        return try JSONDecoder().decode(JSONAPISingle.self, from: data)
+    }
+
+    /// Fetches a file's current metadata: name, parent folder, tip version, size.
+    func fileRef(projectId: String, itemId: String) async throws -> APSItemRef {
+        let itemDoc = try await getSingle(baseURL.appendingPathComponent("data/v1/projects/\(projectId)/items/\(itemId)"))
+        let name = itemDoc.data.attributes?.bestName ?? itemId
+        let folderId = itemDoc.data.relationships?.parent?.data?.id
+        let parent = folderId.map { APSItemRef(type: .folder, displayName: "", projectId: projectId, folderId: $0).identifier.rawValue }
+
+        let tipDoc = try await getSingle(baseURL.appendingPathComponent("data/v1/projects/\(projectId)/items/\(itemId)/tip"))
+        let attrs = tipDoc.data.attributes
+        return APSItemRef(type: .file,
+                          displayName: name,
+                          projectId: projectId,
+                          folderId: folderId,
+                          itemId: itemId,
+                          versionId: tipDoc.data.id,
+                          storageId: tipDoc.data.relationships?.storage?.data?.id,
+                          mimeType: attrs?.mimeType,
+                          fileSize: attrs?.storageSize,
+                          modifiedAt: attrs?.modifiedDate,
+                          parentIdentifier: parent)
+    }
+
+    /// Fetches a folder's current metadata: name and parent.
+    func folderRef(hubId: String?, projectId: String, folderId: String) async throws -> APSItemRef {
+        let doc = try await getSingle(baseURL.appendingPathComponent("data/v1/projects/\(projectId)/folders/\(folderId)"))
+        let name = doc.data.attributes?.bestName ?? folderId
+        let parentFolderId = doc.data.relationships?.parent?.data?.id
+        let parent = parentFolderId.map { APSItemRef(type: .folder, displayName: "", projectId: projectId, folderId: $0).identifier.rawValue }
+        return APSItemRef(type: .folder, displayName: name, hubId: hubId, projectId: projectId, folderId: folderId, parentIdentifier: parent)
     }
 
     // MARK: - Upload (write)

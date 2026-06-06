@@ -102,16 +102,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Periodically nudges the system to check for external changes (polling).
     /// No-ops while signed out (the domain manager is nil).
     private func startSyncTimer() {
+        // Lightweight automatic sync: picks up external adds/renames.
         syncTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             guard let self, let manager = NSFileProviderManager(for: self.domain) else { return }
             manager.signalEnumerator(for: .workingSet) { _ in }
-            manager.signalEnumerator(for: .rootContainer) { _ in }
         }
     }
 
     @objc private func refresh() {
-        // Re-add the domain to force a fresh enumeration (picks up new files and
-        // updated item capabilities) without requiring a new sign-in.
+        // Full re-sync: rebuilds the domain so every external change — including
+        // deletions — is applied. Finder briefly shows an "updating" state.
         Task { @MainActor in
             await removeDomain()
             await registerDomain()
