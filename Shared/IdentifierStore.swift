@@ -53,6 +53,35 @@ final class IdentifierStore {
         }
     }
 
+    /// All known refs (every item browsed so far). Used to populate the working
+    /// set so the system treats them as members and honours didDeleteItems.
+    func allRefs() -> [APSItemRef] {
+        guard let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else {
+            return []
+        }
+        return files.compactMap { url in
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return try? JSONDecoder().decode(APSItemRef.self, from: data)
+        }
+    }
+
+    // Monotonic working-set sync anchor (stable when there are no changes).
+    private var anchorFileURL: URL {
+        directory.deletingLastPathComponent().appendingPathComponent("AccDriveWSAnchor.txt")
+    }
+
+    func workingSetAnchorValue() -> Int {
+        guard let s = try? String(contentsOf: anchorFileURL, encoding: .utf8), let n = Int(s) else { return 0 }
+        return n
+    }
+
+    @discardableResult
+    func bumpWorkingSetAnchor() -> Int {
+        let n = workingSetAnchorValue() + 1
+        try? "\(n)".write(to: anchorFileURL, atomically: true, encoding: .utf8)
+        return n
+    }
+
     func ref(for identifier: NSFileProviderItemIdentifier) -> APSItemRef? {
         if identifier == .rootContainer {
             return .root

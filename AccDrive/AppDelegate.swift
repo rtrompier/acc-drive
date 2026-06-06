@@ -110,12 +110,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func refresh() {
-        // Full re-sync: rebuilds the domain so every external change — including
-        // deletions — is applied. Finder briefly shows an "updating" state.
-        Task { @MainActor in
-            await removeDomain()
-            await registerDomain()
-        }
+        // Signal + reimport (no domain reload, so the open Finder view isn't
+        // broken). The extension reconciles deletions via targeted reimports.
+        guard let manager = NSFileProviderManager(for: domain) else { return }
+        manager.signalEnumerator(for: .workingSet) { _ in }
+        manager.reimportItems(below: .rootContainer) { _ in }
     }
 
     @objc private func quit() {

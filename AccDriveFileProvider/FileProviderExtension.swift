@@ -111,12 +111,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier,
                     request: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
         if containerItemIdentifier == .workingSet || containerItemIdentifier == .trashContainer {
-            return FileProviderEnumerator(containerIdentifier: containerItemIdentifier, containerRef: nil)
+            return FileProviderEnumerator(containerIdentifier: containerItemIdentifier, containerRef: nil, domain: domain)
         }
         guard let ref = IdentifierStore.shared.ref(for: containerItemIdentifier) else {
             throw NSFileProviderError(.noSuchItem)
         }
-        return FileProviderEnumerator(containerIdentifier: containerItemIdentifier, containerRef: ref)
+        return FileProviderEnumerator(containerIdentifier: containerItemIdentifier, containerRef: ref, domain: domain)
     }
 
     // MARK: - Mutations (read-only)
