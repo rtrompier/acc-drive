@@ -266,8 +266,16 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 progress.completedUnitCount = 100
                 completionHandler(nil)
             } catch {
-                Log.fileProvider.error("deleteItem failed for \(ref.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                completionHandler(fileProviderError(error))
+                // If the item is already gone on the server, the deletion goal is
+                // achieved — treat as success (idempotent) so the job doesn't
+                // retry forever and jam the sync queue.
+                if case APSClient.APSError.server(let status, _) = error, status == 404 {
+                    IdentifierStore.shared.remove(identifier)
+                    completionHandler(nil)
+                } else {
+                    Log.fileProvider.error("deleteItem failed for \(ref.displayName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    completionHandler(fileProviderError(error))
+                }
             }
         }
         return progress
