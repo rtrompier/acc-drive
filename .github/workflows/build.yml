@@ -23,7 +23,24 @@ jobs:
         run: brew install xcodegen
 
       - name: Prepare Config.plist
-        run: cp Config.plist.example Config.plist
+        # AccDrive ships its own public (PKCE) Client ID. It is a public
+        # identifier and there is no client secret, so it is safe to embed in
+        # the released binary (Option 1 "turnkey" in the README).
+        run: |
+          cat > Config.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+          <key>APS_CLIENT_ID</key>
+          <string>BJi0IecwujUIBNqdh0qKsTKwYhKjpPEwnjZZSqATfZguyZyo</string>
+          <key>APS_REDIRECT_URI</key>
+          <string>accdrive://oauth/callback</string>
+          <key>MOCK_MODE</key>
+          <false/>
+          </dict>
+          </plist>
+          PLIST
 
       - name: Generate Xcode project
         run: xcodegen generate
@@ -49,7 +66,24 @@ jobs:
         run: brew install xcodegen
 
       - name: Prepare Config.plist
-        run: cp Config.plist.example Config.plist
+        # AccDrive ships its own public (PKCE) Client ID. It is a public
+        # identifier and there is no client secret, so it is safe to embed in
+        # the released binary (Option 1 "turnkey" in the README).
+        run: |
+          cat > Config.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+          <key>APS_CLIENT_ID</key>
+          <string>BJi0IecwujUIBNqdh0qKsTKwYhKjpPEwnjZZSqATfZguyZyo</string>
+          <key>APS_REDIRECT_URI</key>
+          <string>accdrive://oauth/callback</string>
+          <key>MOCK_MODE</key>
+          <false/>
+          </dict>
+          </plist>
+          PLIST
 
       - name: Generate Xcode project
         run: xcodegen generate
