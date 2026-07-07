@@ -22,12 +22,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if AppConfig.shared.mockMode {
             // Demo mode: no sign-in needed. Re-add the domain to clear any
             // cached enumeration so the mock tree shows immediately.
-            Task {
+            Task { @MainActor in
                 await removeDomain()
                 await registerDomain()
             }
         } else if isSignedIn {
-            Task { await registerDomain() }
+            Task { @MainActor in await registerDomain() }
         } else {
             showStatusWindow()
         }
@@ -123,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - FileProvider domain
 
+    @MainActor
     private func registerDomain() async {
         do {
             try await NSFileProviderManager.add(domain)
@@ -134,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @MainActor
     private func removeDomain() async {
         do {
             try await NSFileProviderManager.remove(domain)
@@ -163,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    @MainActor
     private func presentError(_ error: Error) {
         let alert = NSAlert()
         alert.messageText = "AccDrive"
