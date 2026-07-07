@@ -4,20 +4,23 @@
   Configuration for Autodesk Platform Services (APS).
 
   1. Copy this file to Config.plist (which is git-ignored) and fill in your own
-     credentials. Create an APS app at https://aps.autodesk.com/myapps to obtain
-     your client id and client secret.
+     client id. Create an APS app at https://aps.autodesk.com/myapps — pick the
+     "Desktop, Mobile, Single-Page App" type so it is a PUBLIC client that uses
+     PKCE (no client secret needed).
   2. The redirect URI must match the Callback URL registered for the APS app and
      the custom URL scheme declared in AccDrive/Info.plist (CFBundleURLSchemes).
   3. Set MOCK_MODE to <true/> to run a no-account demo: the app serves canned
      data without calling APS or requiring sign-in. Set it to <false/> to use
      the real Autodesk API.
+
+  Note: there is no client secret. Auth uses the Authorization Code grant with
+  PKCE, so nothing sensitive is shipped in the binary. The client id is a public
+  identifier (safe to commit / distribute).
 -->
 <plist version="1.0">
 <dict>
     <key>APS_CLIENT_ID</key>
     <string>YOUR_APS_CLIENT_ID</string>
-    <key>APS_CLIENT_SECRET</key>
-    <string>YOUR_APS_CLIENT_SECRET</string>
     <key>APS_REDIRECT_URI</key>
     <string>accdrive://oauth/callback</string>
     <key>MOCK_MODE</key>

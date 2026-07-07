@@ -16,7 +16,8 @@ final class AuthManager: NSObject, ASWebAuthenticationPresentationContextProvidi
     /// Opens the browser login, exchanges the code, and stores the token.
     func signIn() async throws {
         let state = UUID().uuidString
-        let authURL = APSAuth.authorizationURL(state: state)
+        let pkce = APSAuth.PKCE()
+        let authURL = APSAuth.authorizationURL(state: state, codeChallenge: pkce.challenge)
         let scheme = AppConfig.shared.callbackScheme
 
         let callbackURL: URL = try await withCheckedThrowingContinuation { continuation in
@@ -45,7 +46,7 @@ final class AuthManager: NSObject, ASWebAuthenticationPresentationContextProvidi
             throw AuthError.noAuthorizationCode
         }
 
-        let token = try await APSAuth.exchangeCode(code)
+        let token = try await APSAuth.exchangeCode(code, codeVerifier: pkce.verifier)
         TokenStore.save(token)
         Log.auth.info("Signed in; token stored")
     }

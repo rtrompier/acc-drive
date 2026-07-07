@@ -6,7 +6,6 @@ import Foundation
 /// extension, so `Bundle.main` resolves correctly in either process.
 struct AppConfig {
     let clientId: String
-    let clientSecret: String
     let redirectURI: String
     /// When true, the API layer returns canned demo data instead of calling APS.
     let mockMode: Bool
@@ -22,7 +21,6 @@ struct AppConfig {
         }
 
         let clientId = (dict["APS_CLIENT_ID"] as? String) ?? ""
-        let clientSecret = (dict["APS_CLIENT_SECRET"] as? String) ?? ""
         let redirectURI = (dict["APS_REDIRECT_URI"] as? String) ?? "accdrive://oauth/callback"
         let mockMode = (dict["MOCK_MODE"] as? Bool) ?? false
 
@@ -30,7 +28,7 @@ struct AppConfig {
             Log.app.error("Config.plist does not contain a real APS_CLIENT_ID.")
         }
 
-        return AppConfig(clientId: clientId, clientSecret: clientSecret, redirectURI: redirectURI, mockMode: mockMode)
+        return AppConfig(clientId: clientId, redirectURI: redirectURI, mockMode: mockMode)
     }
 
     /// The URL scheme part of the redirect URI, used by ASWebAuthenticationSession.
