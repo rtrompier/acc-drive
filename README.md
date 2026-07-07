@@ -44,69 +44,76 @@ Shared code (`Shared/`) is compiled into both targets:
 No third-party runtime dependencies — only Foundation, FileProvider, AuthenticationServices,
 Security, CryptoKit, OSLog and SwiftUI.
 
-## Installing
+## Using AccDrive
 
-> **Important — signing.** A FileProvider extension only works when it is signed by a real
-> **Apple Developer team** whose provisioning authorizes the required entitlements (keychain
-> sharing / App Group). On Apple Silicon an **unsigned** app won't even launch, and the
-> extension won't load. The prebuilt binary in **Releases is unsigned** and is provided as a
-> reference/CI artifact — to actually _use_ AccDrive you must **build from source and sign with
-> your own team** (recommended), or re-sign the released binary yourself.
+Whichever option you pick, **one thing is always required**: an ACC **account admin must
+authorize a Client ID** on the account. A user login alone is *not* enough — Autodesk requires
+third-party apps to be approved by the account admin (see
+[Authorizing the app](#-authorizing-the-app-on-an-acc--bim-360-account-the-important-part)).
 
-### Option A — Build from source (recommended)
+There are two ways to run the app.
 
-```sh
-git clone git@github.com:rtrompier/acc-drive.git
-cd acc-drive
-cp Config.plist.example Config.plist     # then fill in your APS client id (see Setup)
-xcodegen generate
-open AccDrive.xcodeproj
-```
+> **⚠️ Signing caveat.** The prebuilt binary in Releases is **unsigned**. Gatekeeper blocks it
+> on first launch, and on **Apple Silicon** an unsigned FileProvider extension may refuse to
+> load. If the drive never shows up in Finder, use **Option 2** (build & sign with your own
+> Apple Developer team) — signing the extension yourself is the reliable path.
 
-Then pick your team in Xcode (both targets → *Signing & Capabilities* → *Automatically manage
-signing*) and build & run the **AccDrive** scheme.
+### Option 1 — Prebuilt app + authorize our Client ID (turnkey)
 
-### Option B — Download from Releases (unsigned)
+Nothing to build. Download the app and have your account admin authorize **our** Client ID.
 
-1. Download `AccDrive.app.zip` from the [latest release](https://github.com/rtrompier/acc-drive/releases), unzip, move **AccDrive.app** to `/Applications`.
-2. Because it is unsigned/unnotarized, Gatekeeper will block it: right-click → **Open**, then
-   *Open* again (or System Settings → *Privacy & Security* → **Open Anyway**).
-3. ⚠️ On Apple Silicon this generally is **not enough** for the FileProvider extension to load —
-   you'll likely need to re-sign it with your own Apple Developer team. If you can, prefer
-   **Option A**.
+1. Download `AccDrive.app.zip` from the [latest release](https://github.com/rtrompier/acc-drive/releases),
+   unzip, and move **AccDrive.app** to `/Applications`.
+2. First launch: right-click → **Open** → *Open* (or System Settings → *Privacy & Security* →
+   **Open Anyway**) to get past Gatekeeper.
+3. Ask your ACC **account admin** to authorize **AccDrive's Client ID** on the account:
+   ```
+   BJi0IecwujUIBNqdh0qKsTKwYhKjpPEwnjZZSqATfZguyZyo
+   ```
+   at <https://acc.autodesk.com/> → **Account admin → Settings → Custom Integrations →
+   Add a custom integration**, checking **BOTH** *Account Administration* **and** *Document
+   Management* (full details + the Autodesk activation email are
+   [below](#-authorizing-the-app-on-an-acc--bim-360-account-the-important-part)).
+4. [Enable the extension](#enabling-the-extension), then ☁️ → **Sign in to Autodesk**.
+
+### Option 2 — Build with your own Client ID
+
+Full control: your own APS app and your own code signing (also the reliable path on Apple
+Silicon, since you sign the extension with your own team).
+
+1. **Create your own APS app** at <https://aps.autodesk.com/myapps> (the free APS plan is enough):
+   - Type: **Desktop, Mobile, Single-Page App** — a **public client** using **PKCE**
+     (⚠️ *not* "Traditional Web App"; there is **no client secret**)
+   - Callback URL: **`accdrive://oauth/callback`**
+   - APIs: **Data Management API** (+ OSS)
+   - Copy the **Client ID**
+2. Build & sign:
+   ```sh
+   git clone git@github.com:rtrompier/acc-drive.git
+   cd acc-drive
+   cp Config.plist.example Config.plist      # put YOUR APS_CLIENT_ID in it
+   xcodegen generate
+   open AccDrive.xcodeproj                     # both targets → pick your team, then build & run
+   ```
+   Requires **macOS 13+**, **full Xcode** (Command Line Tools alone can't build/sign an app
+   extension), **XcodeGen** (`brew install xcodegen`), and a paid **Apple Developer Program**
+   team — a free *Personal Team* rejects the required entitlements.
+3. Have your ACC **account admin** authorize **your** Client ID on the account (same Custom
+   Integration steps as Option 1, [below](#-authorizing-the-app-on-an-acc--bim-360-account-the-important-part)).
+4. [Enable the extension](#enabling-the-extension), then ☁️ → **Sign in**.
 
 ### Enabling the extension
 
 macOS disables third-party file providers by default (same as Google Drive / OneDrive on first
 run): System Settings → *General → Login Items & Extensions → File Providers* → turn
-**AccDrive** on. A cloud icon (☁️) also appears in the menu bar; use it to **Sign in to
-Autodesk**, after which the *Autodesk Construction Cloud* location appears in Finder's sidebar.
-
-## Prerequisites
-
-- **macOS 13+** and **full Xcode** (Command Line Tools alone cannot build/sign an app extension)
-- **XcodeGen**: `brew install xcodegen`
-- A paid **Apple Developer Program** membership. A free *Personal Team* does **not** work — it
-  rejects the App Group / keychain-sharing / `fileprovider.testing-mode` capabilities.
-- An **APS app** (see Setup) — unless you only want to try **mock mode**.
-
-## Setup
-
-1. **APS app** — create one at <https://aps.autodesk.com/myapps> (the free APS plan is enough):
-   - Type: **Desktop, Mobile, Single-Page App** — a **public client** that uses **PKCE**
-     (⚠️ *not* "Traditional Web App"; there is **no client secret**)
-   - Callback URL: **`accdrive://oauth/callback`**
-   - APIs: **Data Management API** (+ OSS)
-   - Copy the **Client ID** into `Config.plist` (`APS_CLIENT_ID`)
-2. **Team ID** — set `DEVELOPMENT_TEAM` in `project.yml`, or pick your team in Xcode for **both**
-   targets.
-3. Build & run, enable the extension, sign in (see [Installing](#installing)).
+**AccDrive** on. A cloud icon (☁️) sits in the menu bar for sign in / out / refresh; after
+signing in, the *Autodesk Construction Cloud* location appears in Finder's sidebar.
 
 ### Trying it without an Autodesk account (mock mode)
 
-Set `MOCK_MODE` to `true` in `Config.plist`, build & run. The app auto-mounts a demo tree
-(hubs → projects → folders → files) with on-demand download, no sign-in or APS app needed.
-Great for seeing the Finder integration work end-to-end.
+Building from source (Option 2)? Set `MOCK_MODE` to `true` in `Config.plist`, build & run. The
+app auto-mounts a demo tree (hubs → projects → folders → files) with on-demand download, no
+sign-in or APS app needed — great for seeing the Finder integration work end-to-end.
 
 ## ⚠️ Authorizing the app on an ACC / BIM 360 account (the important part)
 
@@ -152,9 +159,11 @@ check it, then Sign out → Sign in.
 See: [Missing "BIM 360 Docs" option in "Add Custom Integration" dialog](https://fieldofviewblog.wordpress.com/2023/04/13/missing-bim-360-docs-option-in-add-custom-integration-dialog/)
 and [Manage API Access to BIM 360 Docs (APS docs)](https://aps.autodesk.com/en/docs/bim360/v1/tutorials/getting-started/manage-access-to-docs/).
 
-> **Using your own Client ID:** the Client ID is a public identifier (safe to distribute), but
-> each ACC account you want to access must authorize *that* Client ID following the steps above
-> (including the Autodesk email if "Document Management" isn't offered).
+> **Which Client ID?** With **Option 1** you authorize AccDrive's shared Client ID
+> (`BJi0IecwujUIBNqdh0qKsTKwYhKjpPEwnjZZSqATfZguyZyo`); with **Option 2** you authorize your
+> own. Either way the Client ID is a public identifier (safe to distribute — PKCE means there
+> is no secret), and **each** ACC account you want to access must authorize *that* Client ID
+> following the steps above (including the Autodesk email if "Document Management" isn't offered).
 
 ## How it works
 
@@ -200,9 +209,10 @@ secret** — auth uses PKCE, so nothing sensitive is shipped in the binary.
 
 ## Notes / limitations
 
-- **Distribution**: the released binary is **unsigned** — to run AccDrive you must build from
-  source and sign it with your own Apple Developer team (the FileProvider extension won't load
-  otherwise). See [Installing](#installing).
+- **Distribution**: the released binary is **unsigned** and ships AccDrive's shared (public,
+  PKCE) Client ID. Gatekeeper blocks it on first launch, and on Apple Silicon the FileProvider
+  extension may not load unsigned — building & signing with your own team (Option 2) is the
+  reliable path. See [Using AccDrive](#using-accdrive).
 - **Account-level changes** (a new project, a new hub, or an account/hub rename) surface only
   after **sign out / sign in**, not via the live 30 s sync (tracking the hub/root level jams the
   system's create-item queue, so it is deliberately excluded).
