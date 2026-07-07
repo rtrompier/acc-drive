@@ -11,9 +11,12 @@ are downloaded only when opened.
 
 - Browse your ACC/BIM 360 **Hubs → Projects → Folders → Files** natively in Finder
 - **On-demand download**: files are placeholders until opened (real bytes fetched from S3)
-- Menu bar app (no Dock icon) for sign in / sign out / open in Finder
-- 3-legged OAuth (APS), tokens stored in the Keychain with silent refresh
-- Read-only (safe): no accidental edits/deletes pushed back to ACC
+- **Full read/write**: create, rename, move and delete — **files _and_ folders** — pushed back
+  to ACC. Editing a file uploads a **new version**.
+- **Two-way sync**: changes made in the ACC web UI (add / rename / delete inside a project)
+  propagate to Finder automatically (~30 s)
+- Menu bar app (no Dock icon): sign in / sign out / open in Finder / refresh
+- OAuth (APS) with **PKCE** — no client secret — tokens stored in the Keychain, silent refresh
 - **Mock mode** to try the whole experience with zero Autodesk setup
 
 ## Architecture
@@ -23,53 +26,81 @@ Two targets in one Xcode project (generated from `project.yml` via [XcodeGen](ht
 | Target | Type | Role |
 | --- | --- | --- |
 | `AccDrive` | Menu bar app (`LSUIElement`) | Authentication + status, registers the FileProvider domain |
-| `AccDriveFileProvider` | `NSFileProviderReplicatedExtension` | All Finder integration (enumeration + downloads) |
+| `AccDriveFileProvider` | `NSFileProviderReplicatedExtension` | All Finder integration (enumeration, downloads, mutations, change tracking) |
 
 Shared code (`Shared/`) is compiled into both targets:
 
-- `APSClient` — APS Data Management + OSS API wrapper (async/await, 401 refresh, 429/5xx backoff)
-- `APSAuth` / `TokenManager` / `OAuthToken` / `TokenStore` — OAuth + silent refresh, tokens in Keychain
-- `KeychainHelper` — generic-password storage, shared via the keychain access group
-- `IdentifierStore` — `[NSFileProviderItemIdentifier: APSItemRef]` map in App Group `UserDefaults`
+- `APSClient` — APS Data Management + OSS API wrapper (async/await, 401 refresh, 429/5xx backoff);
+  read **and** write (upload, create folder, rename, move, delete, versions)
+- `APSAuth` / `TokenManager` / `OAuthToken` / `TokenStore` — OAuth **Authorization Code + PKCE**
+  (public client, no secret), silent refresh, tokens in Keychain
+- `KeychainHelper` — generic-password storage
+- `IdentifierStore` — persistent `[NSFileProviderItemIdentifier: APSItemRef]` map, per-container
+  snapshots and a monotonic working-set sync anchor, stored in the **extension's own
+  Application Support container**
 - `APSItemRef` / `APSModels` — domain model + JSON:API decoding
 - `MockAPS` — canned data used when `MOCK_MODE` is enabled
 
 No third-party runtime dependencies — only Foundation, FileProvider, AuthenticationServices,
-Security, OSLog and SwiftUI.
+Security, CryptoKit, OSLog and SwiftUI.
+
+## Installing
+
+> **Important — signing.** A FileProvider extension only works when it is signed by a real
+> **Apple Developer team** whose provisioning authorizes the required entitlements (keychain
+> sharing / App Group). On Apple Silicon an **unsigned** app won't even launch, and the
+> extension won't load. The prebuilt binary in **Releases is unsigned** and is provided as a
+> reference/CI artifact — to actually _use_ AccDrive you must **build from source and sign with
+> your own team** (recommended), or re-sign the released binary yourself.
+
+### Option A — Build from source (recommended)
+
+```sh
+git clone git@github.com:rtrompier/acc-drive.git
+cd acc-drive
+cp Config.plist.example Config.plist     # then fill in your APS client id (see Setup)
+xcodegen generate
+open AccDrive.xcodeproj
+```
+
+Then pick your team in Xcode (both targets → *Signing & Capabilities* → *Automatically manage
+signing*) and build & run the **AccDrive** scheme.
+
+### Option B — Download from Releases (unsigned)
+
+1. Download `AccDrive.app.zip` from the [latest release](https://github.com/rtrompier/acc-drive/releases), unzip, move **AccDrive.app** to `/Applications`.
+2. Because it is unsigned/unnotarized, Gatekeeper will block it: right-click → **Open**, then
+   *Open* again (or System Settings → *Privacy & Security* → **Open Anyway**).
+3. ⚠️ On Apple Silicon this generally is **not enough** for the FileProvider extension to load —
+   you'll likely need to re-sign it with your own Apple Developer team. If you can, prefer
+   **Option A**.
+
+### Enabling the extension
+
+macOS disables third-party file providers by default (same as Google Drive / OneDrive on first
+run): System Settings → *General → Login Items & Extensions → File Providers* → turn
+**AccDrive** on. A cloud icon (☁️) also appears in the menu bar; use it to **Sign in to
+Autodesk**, after which the *Autodesk Construction Cloud* location appears in Finder's sidebar.
 
 ## Prerequisites
 
 - **macOS 13+** and **full Xcode** (Command Line Tools alone cannot build/sign an app extension)
 - **XcodeGen**: `brew install xcodegen`
-- An **Apple Developer Team** (required for App Group + Keychain sharing + FileProvider signing).
-  A free *Personal Team* does **not** work — it rejects the `fileprovider.testing-mode` and
-  App Group capabilities. A paid Apple Developer Program membership is required.
-- An **APS app** (see below) — unless you only want to try **mock mode**.
+- A paid **Apple Developer Program** membership. A free *Personal Team* does **not** work — it
+  rejects the App Group / keychain-sharing / `fileprovider.testing-mode` capabilities.
+- An **APS app** (see Setup) — unless you only want to try **mock mode**.
 
 ## Setup
 
-```sh
-git clone git@github.com:rtrompier/acc-drive.git
-cd acc-drive
-cp Config.plist.example Config.plist     # then fill in your APS credentials
-xcodegen generate
-open AccDrive.xcodeproj
-```
-
-1. **APS app** — create one at <https://aps.autodesk.com/myapps> (you need a developer hub;
-   the free APS plan is enough):
-   - Type: **Traditional Web App** (confidential client with secret)
+1. **APS app** — create one at <https://aps.autodesk.com/myapps> (the free APS plan is enough):
+   - Type: **Desktop, Mobile, Single-Page App** — a **public client** that uses **PKCE**
+     (⚠️ *not* "Traditional Web App"; there is **no client secret**)
    - Callback URL: **`accdrive://oauth/callback`**
    - APIs: **Data Management API** (+ OSS)
-   - Copy the **Client ID** and **Client Secret** into `Config.plist`
-2. **Team ID** — set `DEVELOPMENT_TEAM` in `project.yml`, or just pick your team in Xcode
-   (target → Signing & Capabilities → *Automatically manage signing*) for **both** targets.
-3. Build & run the **AccDrive** scheme. A cloud icon appears in the menu bar.
-4. **Enable the extension**: System Settings → *General → Login Items & Extensions →
-   File Providers* → turn **AccDrive** on. (macOS disables third-party file providers by
-   default — same as Google Drive / OneDrive on first run.)
-5. Menu bar ☁️ → **Sign in to Autodesk**. The *Autodesk Construction Cloud* location appears
-   in Finder's sidebar.
+   - Copy the **Client ID** into `Config.plist` (`APS_CLIENT_ID`)
+2. **Team ID** — set `DEVELOPMENT_TEAM` in `project.yml`, or pick your team in Xcode for **both**
+   targets.
+3. Build & run, enable the extension, sign in (see [Installing](#installing)).
 
 ### Trying it without an Autodesk account (mock mode)
 
@@ -121,22 +152,30 @@ check it, then Sign out → Sign in.
 See: [Missing "BIM 360 Docs" option in "Add Custom Integration" dialog](https://fieldofviewblog.wordpress.com/2023/04/13/missing-bim-360-docs-option-in-add-custom-integration-dialog/)
 and [Manage API Access to BIM 360 Docs (APS docs)](https://aps.autodesk.com/en/docs/bim360/v1/tutorials/getting-started/manage-access-to-docs/).
 
-> **Using your own Client ID:** this repo ships only placeholders in `Config.plist.example` —
-> everyone uses **their own** APS app. Each ACC account you want to access must authorize
-> *that* Client ID following the steps above (including the Autodesk email if "Document
-> Management" isn't offered).
+> **Using your own Client ID:** the Client ID is a public identifier (safe to distribute), but
+> each ACC account you want to access must authorize *that* Client ID following the steps above
+> (including the Autodesk email if "Document Management" isn't offered).
 
 ## How it works
 
-- **Auth**: 3-legged OAuth via `ASWebAuthenticationSession`. The confidential client uses
-  HTTP Basic (`client_id:client_secret`) on the token endpoint. Access/refresh tokens + expiry
-  live in the Keychain (shared with the extension via the keychain access group) and are
-  refreshed silently ~60s before expiry.
+- **Auth**: OAuth **Authorization Code grant with PKCE** via `ASWebAuthenticationSession`. No
+  client secret — a per-flow `code_verifier`/`code_challenge` (S256) is generated, and the
+  `client_id` is sent in the token request body. Access/refresh tokens + expiry live in the
+  Keychain and are refreshed silently. Sign-in uses an **ephemeral** web session so you can pick
+  which Autodesk account to use.
 - **Enumeration**: `FileProviderEnumerator` calls APS for a container's children, caches each
-  child's `APSItemRef` in the shared `IdentifierStore`, and yields `NSFileProviderItem`s.
+  child's `APSItemRef` in the `IdentifierStore`, and yields `NSFileProviderItem`s.
 - **Download**: `fetchContents` resolves the tip version's OSS storage URN, gets a signed S3
   URL via `…/signeds3download`, downloads to a temp file, and hands it to the system.
-- **Read-only**: `createItem`/`modifyItem`/`deleteItem` return an unsupported error.
+- **Write**: `createItem` uploads a file (create storage → signed-S3 upload → items POST) or
+  creates a folder; `modifyItem` uploads a new version on edit, renames (also a new version for
+  files), and moves (reparent); `deleteItem` tombstones a file version / hides a folder. Delete
+  is **idempotent** (already-gone on the server counts as success).
+- **Change tracking**: the **working-set** enumerator lists every known item (so the system
+  honours `didDeleteItems`); `enumerateChanges` diffs each browsed project/folder against its
+  last snapshot and reports `didUpdate` / `didDeleteItems` with a **monotonic** sync anchor. The
+  menu bar app nudges the working set every 30 s. Account-level changes (a **new project**, a
+  **renamed account/hub**) surface only after a **sign out / sign in** (a full re-enumeration).
 
 ### Where are the files stored locally?
 
@@ -152,25 +191,23 @@ This is a *replicated* FileProvider, so macOS (not the app) manages on-disk stor
 
 | Key | Description |
 | --- | --- |
-| `APS_CLIENT_ID` | Your APS app Client ID |
-| `APS_CLIENT_SECRET` | Your APS app Client Secret |
+| `APS_CLIENT_ID` | Your APS app Client ID (public identifier — PKCE, no secret) |
 | `APS_REDIRECT_URI` | Must match the app's Callback URL and the `accdrive` URL scheme |
 | `MOCK_MODE` | `true` = serve demo data without APS; `false` = real API |
 
-`Config.plist` is **gitignored** (it holds secrets). Commit only `Config.plist.example`.
+`Config.plist` is **gitignored**; commit only `Config.plist.example`. There is **no client
+secret** — auth uses PKCE, so nothing sensitive is shipped in the binary.
 
 ## Notes / limitations
 
-- **Read-only** drive (no upload/rename/delete back to ACC).
-- **Chunked downloads** for very large files (multi-part `signeds3download`) are not handled
-  yet — only the single-`url` response.
-- **Change tracking**: `enumerateChanges` reports no incremental changes; new content shows up
-  on the next full enumeration (sign out/in, or Finder refresh). A real sync-anchor diff is a
-  future improvement.
-- **Distribution**: a confidential client (with secret) is fine for personal/dev use, but
-  embedding one shared secret in a distributed binary is insecure. For real distribution,
-  switch the APS app to **Desktop/Mobile (PKCE, no secret)** and adapt `APSAuth`.
-- **`topFolders`** uses the correct route `GET /project/v1/hubs/{hubId}/projects/{projectId}/topFolders`.
+- **Distribution**: the released binary is **unsigned** — to run AccDrive you must build from
+  source and sign it with your own Apple Developer team (the FileProvider extension won't load
+  otherwise). See [Installing](#installing).
+- **Account-level changes** (a new project, a new hub, or an account/hub rename) surface only
+  after **sign out / sign in**, not via the live 30 s sync (tracking the hub/root level jams the
+  system's create-item queue, so it is deliberately excluded).
+- **Chunked downloads** for very large files (multi-part `signeds3download`) are not handled yet
+  — only the single-`url` response.
 
 ## License
 
